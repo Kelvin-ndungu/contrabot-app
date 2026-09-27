@@ -53,7 +53,7 @@ export default function ChatPage() {
       const actions =
         outcome === "underage"
           ? [["restart", ui.startOver]]
-          : [["/ask", ui.askQuestion], ["restart", ui.startOver]];
+          : [["/chat", ui.askQuestion], ["restart", ui.startOver]];
       replies = {
         options: actions.map(([v, label]) => ({ v, label })),
         onChoose: ([v]) => (v === "restart" ? flow.restart() : navigate(v)),

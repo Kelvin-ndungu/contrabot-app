@@ -5,6 +5,9 @@ import chromadb
 DATA_DIR = Path(__file__).parent.parent / "data"
 CHROMADB_DIR = DATA_DIR / "chromadb"
 
+# Searched in this order; the Kenya guideline is the primary reference.
+COLLECTIONS = ("kenya_fp", "who_mec", "aphrc")
+
 
 def get_chroma_client():
     CHROMADB_DIR.mkdir(parents=True, exist_ok=True)
@@ -20,10 +23,40 @@ def query_knowledge_base(query: str, collection_name: str = "who_mec", num_resul
         return {}
 
 
+def _citation(meta: dict) -> str:
+    source = meta.get("source", "unknown")
+    page = meta.get("page")
+    return f"{source}, p. {page}" if page else source
+
+
+def retrieve(query: str, k: int = 5, per_collection: int = 4, max_distance: float = 0.75) -> list[dict]:
+    """Return the k most relevant chunks across all collections, closest first.
+
+    Each hit: {"text", "citation", "source", "page", "chapter", "distance"}.
+    Hits further than `max_distance` (cosine) are dropped as off-topic.
+    """
+    hits: list[dict] = []
+    for name in COLLECTIONS:
+        res = query_knowledge_base(query, collection_name=name, num_results=per_collection)
+        if not res or not res.get("documents"):
+            continue
+        for text, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0]):
+            meta = meta or {}
+            if dist is not None and dist > max_distance:
+                continue
+            hits.append(
+                {
+                    "text": text,
+                    "citation": _citation(meta),
+                    "source": meta.get("source", name),
+                    "page": meta.get("page"),
+                    "chapter": meta.get("chapter"),
+                    "distance": dist,
+                }
+            )
+    hits.sort(key=lambda h: h["distance"] if h["distance"] is not None else 1.0)
+    return hits[:k]
+
+
 def query_all_collections(query: str, num_results: int = 3) -> list[str]:
-    chunks: list[str] = []
-    for name in ("who_mec", "aphrc"):
-        results = query_knowledge_base(query, collection_name=name, num_results=num_results)
-        if results and results.get("documents"):
-            chunks.extend(results["documents"][0])
-    return chunks
+    return [h["text"] for h in retrieve(query, k=num_results * len(COLLECTIONS), per_collection=num_results)]

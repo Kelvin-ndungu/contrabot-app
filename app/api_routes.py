@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from app.api_schemas import (
     WebChatRequest,
     WebChatResponse,
+    ChatSource,
     WebRecommendRequest,
     WebRecommendResponse,
     MethodRecommendation,
@@ -25,7 +26,8 @@ from services.referrals import (
     referral_counts,
     get_referral_contact_link,
 )
-from services.knowledge import query_all_collections
+from services.knowledge import query_all_collections, retrieve
+from services.chat_router import mentions_assault, route_message
 from app.openai_client import chat_completion
 
 router = APIRouter()
@@ -139,46 +141,186 @@ def api_recommend(body: WebRecommendRequest):
     )
 
 
+STYLE_NAMES = {"en": "English", "sw": "Kiswahili", "sheng": "Sheng"}
+
+DEFAULT_DOCTOR = "Dr. Amara"
+
+TRIAGE_REPLY = {
+    "en": (
+        "I would love to help you choose. First I need to know a little about you and your body, "
+        "so I can tell you what is safe for you. It is quick, and it stays private. "
+        "Tap \"Start the questions\" below when you are ready."
+    ),
+    "sw": (
+        "Ningependa kukusaidia kuchagua. Kwanza nahitaji kujua kidogo kuhusu wewe na mwili wako, "
+        "ili nikuambie kilicho salama kwako. Ni haraka, na ni siri. "
+        "Bonyeza \"Anza maswali\" hapa chini ukiwa tayari."
+    ),
+    "sheng": (
+        "Poa, nitakusaidia kuchagua. Kwanza nataka kujua kiasi kuhusu wewe na body yako, "
+        "ndio nikuambie kitu iko safe kwako. Ni haraka na ni siri. "
+        "Bonyeza \"Anza maswali\" hapo chini ukiwa ready."
+    ),
+}
+# Safety messages stay in standard Kiswahili for Sheng speakers, so nothing is lost in slang.
+URGENT_PREFIX = {
+    "en": "This could be serious. Please go to the nearest health facility now, or call 999 or 112 in an emergency.",
+    "sw": "Hii inaweza kuwa hatari. Tafadhali nenda kwenye kituo cha afya kilicho karibu sasa hivi, au piga 999 au 112 wakati wa dharura.",
+}
+ASSAULT_NOTE = {
+    "en": (
+        "If you were forced to have sex, go to a facility as soon as you can: emergency contraception works "
+        "up to 5 days after, and medicine to prevent HIV (PEP) must start within 72 hours. You can call the "
+        "free GBV helpline on 1195."
+    ),
+    "sw": (
+        "Kama ulilazimishwa kufanya ngono, nenda kituo cha afya haraka iwezekanavyo: dawa ya dharura ya kuzuia "
+        "mimba hufanya kazi hadi siku 5 baadaye, na dawa ya kuzuia HIV (PEP) lazima ianzishwe ndani ya saa 72. "
+        "Unaweza kupiga simu ya bure ya GBV 1195."
+    ),
+}
+GREETING_FALLBACK = {
+    "en": "Hi! I'm here to answer your questions about contraception and family planning. What would you like to know?",
+    "sw": "Habari! Niko hapa kujibu maswali yako kuhusu uzazi wa mpango. Ungependa kujua nini?",
+    "sheng": "Niaje! Niko hapa kukujibu maswali za family planning. Unataka kujua nini?",
+}
+
+
+def _lang_code(language: str) -> str:
+    return "sw" if language.lower() in ("sw", "kiswahili", "swahili") else "en"
+
+
+def _to_english(text: str) -> str:
+    # The guidelines and the embedding model are English-only, so other languages retrieve poorly.
+    try:
+        out = chat_completion(
+            messages=[
+                {"role": "system", "content": "Translate the user's text to English. Reply with the translation only."},
+                {"role": "user", "content": text},
+            ],
+            task="router",
+            temperature=0,
+            max_tokens=120,
+        )
+        return out.strip() or text
+    except Exception:
+        return text
+
+
+def _retrieval_query(body: WebChatRequest, style: str, routed_query: str = "") -> str:
+    # The router already rewrote the message as a standalone English query; this is the fallback.
+    if routed_query:
+        return routed_query
+    # Short follow-ups ("and for implants?") need the previous question to retrieve well.
+    last_user = next((t.content for t in reversed(body.history) if t.role == "user"), "")
+    query = f"{last_user} {body.message}" if last_user and len(body.message.split()) < 6 else body.message
+    return query if style == "en" else _to_english(query)
+
+
+def _clean_reply(reply: str) -> tuple[str, set[int]]:
+    """Return the reply as the person should see it, and the excerpt numbers it cited.
+
+    The model marks each fact with [n] so answers stay grounded and auditable; the markers are
+    removed from the text because they mean nothing to the person reading it."""
+    cited = {int(n) for n in re.findall(r"\[(\d+)\]", reply)}
+    reply = re.sub(r"\s*\[\d+\]", "", reply)
+    # The chat bubble shows plain text; drop markdown bullets and bold if the model adds them.
+    reply = re.sub(r"^\s*[*\-ΓÇó]\s+", "", reply, flags=re.M).replace("**", "")
+    return reply.strip(), cited
+
+
+def _history(body: WebChatRequest) -> list[dict]:
+    return [{"role": t.role, "content": t.content} for t in body.history[-HISTORY_TURNS:]]
+
+
+def _system_prompt(body: WebChatRequest) -> str:
+    return CHAT_SYSTEM_PROMPT.replace("{doctor}", (body.context or {}).get("doctor") or DEFAULT_DOCTOR)
+
+
+def _answer_from_guidelines(
+    body: WebChatRequest, style: str, routed_query: str = "", urgent: bool = False
+) -> tuple[str, list[ChatSource]]:
+    hits = retrieve(_retrieval_query(body, style, routed_query), k=5)
+    excerpts = "\n\n".join(
+        f"[{i}] ({h['citation']}{', ' + h['chapter'] if h.get('chapter') else ''})\n{h['text']}" for i, h in enumerate(hits, 1)
+    )
+    triage_summary = (body.context or {}).get("triage_summary")
+    prompt = (
+        f"Guideline excerpts:\n{excerpts or '(none found)'}\n\n"
+        + (f"The person's triage summary: {triage_summary}\n\n" if triage_summary else "")
+        + ("The person may be describing an emergency. A line telling them to get care now is already shown; "
+           "add only what else they should know.\n\n" if urgent else "")
+        + f"Reply in {STYLE_NAMES[style]}.\nMessage: {body.message}"
+    )
+    reply = chat_completion(
+        messages=[{"role": "system", "content": _system_prompt(body)}, *_history(body), {"role": "user", "content": prompt}],
+        max_tokens=600,
+        temperature=0.3,
+    )
+    reply, cited = _clean_reply(reply)
+    # Not shown under each reply; the page keeps them so "where is this from?" can be answered.
+    sources, seen = [], set()
+    for i, h in enumerate(hits, 1):
+        if i in cited and h["citation"] not in seen:
+            seen.add(h["citation"])
+            sources.append(ChatSource(ref=i, citation=h["citation"], chapter=h.get("chapter") or None))
+    return reply, sources
+
+
+def _small_talk(body: WebChatRequest, style: str) -> str:
+    first = not any(t.role == "assistant" for t in body.history[1:])
+    prompt = (
+        "This message is small talk (a greeting, thanks, goodbye, a question about you or where your "
+        "information comes from) and needs no guideline excerpts. Reply naturally in 1 to 3 short sentences"
+        + (", say you are here to help them understand family planning, and gently ask what brings them here today"
+           if first else "")
+        + f". Reply in {STYLE_NAMES[style]}.\nMessage: {body.message}"
+    )
+    reply = chat_completion(
+        messages=[{"role": "system", "content": _system_prompt(body)}, *_history(body), {"role": "user", "content": prompt}],
+        max_tokens=150,
+        temperature=0.7,
+    )
+    return _clean_reply(reply)[0]
+
+
 @router.post("/chat", response_model=WebChatResponse)
 def api_chat(body: WebChatRequest):
     session_id = body.session_id or str(uuid.uuid4())
-    rag = query_all_collections(body.message, num_results=2)
-    context = "\n".join(rag[:2]) if rag else ""
-    system = load_system_prompt()
-    try:
-        reply = chat_completion(
-            messages=[
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Context:\n{context}\n\n"
-                        # The triage summary lets answers take the user's health profile into account.
-                        + (f"User's triage summary: {body.context['triage_summary']}\n\n" if body.context and body.context.get("triage_summary") else "")
-                        + (
-                            f"The user is watching a 3D explainer for {body.context.get('method_title') or body.context.get('method')}. "
-                            "Keep answers short (2–4 sentences), method-focused, and practical.\n\n"
-                            if body.context and body.context.get("mode") == "explainer_3d"
-                            else ""
-                        )
-                        + f"Reply in {_language_name(body.language)}.\nUser: {body.message}"
-                    ),
-                },
-            ],
-            max_tokens=400,
-            temperature=0.6,
-        )
-    except Exception as exc:
-        reply = _fallback_chat_reply(body.message)
+    has_triage = bool((body.context or {}).get("triage_summary"))
+    decision = route_message(body.message, has_triage=has_triage, history=_history(body))
+    # Reply in the style the person wrote in; the UI language is the fallback.
+    style = decision.lang or _lang_code(body.language)
+    fixed = "en" if style == "en" else "sw"
+
+    sources = []
+    if decision.route == "triage":
+        reply = TRIAGE_REPLY[style]
+    elif decision.route == "chat":
+        try:
+            reply = _small_talk(body, style)
+        except Exception:
+            reply = GREETING_FALLBACK[style]
+    else:
+        urgent = decision.route == "urgent"
+        try:
+            reply, sources = _answer_from_guidelines(body, style, decision.query, urgent=urgent)
+        except Exception:
+            reply, sources = ("" if urgent else _fallback_chat_reply(body.message)), []
+        if urgent:
+            lead = URGENT_PREFIX[fixed] + (" " + ASSAULT_NOTE[fixed] if mentions_assault(body.message) else "")
+            reply = f"{lead}\n\n{reply}".strip()
 
     quick = []
     if body.context and body.context.get("mode") == "side_effects":
         quick = ["Thank you", "Find a clinic"]
     return WebChatResponse(
-        reply=reply.strip(),
+        reply=reply,
         quick_replies=quick,
         state=body.context.get("mode") if body.context else None,
         session_id=session_id,
+        route=decision.route,
+        sources=sources,
     )
 
 

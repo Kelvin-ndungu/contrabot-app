@@ -86,11 +86,27 @@ class WebRecommendResponse(BaseModel):
     alerts: list[str] = Field(default_factory=list)
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class WebChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     language: str = "english"
     context: Optional[dict] = None
+    # Earlier turns of this conversation, oldest first, so follow-up questions make sense.
+    history: list[ChatTurn] = Field(default_factory=list)
+
+
+class ChatSource(BaseModel):
+    ref: int
+    citation: str
+    chapter: Optional[str] = None
+
+
+ChatRoute = Literal["answer", "triage", "urgent", "chat"]
 
 
 class WebChatResponse(BaseModel):
@@ -98,3 +114,7 @@ class WebChatResponse(BaseModel):
     quick_replies: list[str] = Field(default_factory=list)
     state: Optional[str] = None
     session_id: Optional[str] = None
+    # "triage" means the person should answer the triage questions for a recommendation.
+    route: ChatRoute = "answer"
+    sources: list[ChatSource] = Field(default_factory=list)
+
