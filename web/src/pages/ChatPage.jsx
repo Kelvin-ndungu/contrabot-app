@@ -59,14 +59,22 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  const confirmHealth = () => {
+  const confirmHealth = (extraNote = "") => {
     const flags = selectedHealth.includes("None of these") ? [] : selectedHealth;
-    useChatStore.getState().updateProfile({ health_flags: flags });
+    const updates = { health_flags: flags };
+    if (extraNote) updates.other_concerns = extraNote;
+    useChatStore.getState().updateProfile(updates);
     useChatStore.getState().setFlowState(4);
-    useChatStore.getState().addMessage({ role: "user", text: flags.length ? flags.join(", ") : "None", timestamp: new Date().toLocaleTimeString() });
+    const label = [
+      flags.length ? flags.join(", ") : null,
+      extraNote || null,
+    ]
+      .filter(Boolean)
+      .join(" — ") || "None";
+    useChatStore.getState().addMessage({ role: "user", text: label, timestamp: new Date().toLocaleTimeString() });
     useChatStore.getState().addMessage({
       role: "bot",
-      text: "What matters most to you in a contraceptive method?",
+      text: "What matters most to you in a contraceptive method? Tap a choice or type your own.",
       timestamp: new Date().toLocaleTimeString(),
     });
     setSelectedHealth([]);
@@ -85,8 +93,13 @@ export default function ChatPage() {
 
   const sendFreeText = () => {
     if (!input.trim()) return;
-    handleQuickReply(input.trim());
+    const text = input.trim();
     setInput("");
+    if (flowState === 3) {
+      confirmHealth(text);
+      return;
+    }
+    handleQuickReply(text);
   };
 
   return (
@@ -172,7 +185,7 @@ export default function ChatPage() {
                     ))}
                   </div>
                   {selectedHealth.length > 0 && (
-                    <Button size="sm" onClick={confirmHealth}>
+                    <Button size="sm" onClick={() => confirmHealth()}>
                       Continue →
                     </Button>
                   )}
@@ -199,7 +212,11 @@ export default function ChatPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && sendFreeText()}
-                  placeholder="Type a message or tap an option above..."
+                  placeholder={
+                    flowState === 3
+                      ? "Or type any other health concern..."
+                      : "Type a message or tap an option above..."
+                  }
                 />
                 <Button size="icon" onClick={sendFreeText} aria-label="Send">
                   <Send className="h-4 w-4" />

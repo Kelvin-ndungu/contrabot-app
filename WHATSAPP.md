@@ -157,9 +157,11 @@ Session key = WhatsApp phone number (`from` field). TTL = 30 minutes.
 
 Interactive UI used by stage:
 
-- Language: WhatsApp **list** message
-- Yes/no and preference questions: WhatsApp **reply buttons** (max 3)
-- Free text: name, age, district, chat Q&A
+- Language: WhatsApp **reply buttons** (English / Kiswahili)
+- Breastfeeding / clinic access: WhatsApp **reply buttons** (max 3)
+- Health conditions: **multi-select via text** — reply with numbers like `1,3`, or type your own concern (WhatsApp buttons are single-select only)
+- Preference: reply buttons **or** free text (“I'll type”)
+- Free text: age, district, chat Q&A, health/preference notes
 - Optional: WhatsApp **location** message for GPS clinic lookup
 
 ---

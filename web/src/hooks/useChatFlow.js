@@ -87,7 +87,19 @@ export function useChatFlow() {
       if (state === 2) {
         store.updateProfile({ breastfeeding: text });
         store.setFlowState(3);
-        bot("Do you have any of the following? Select all that apply, or tap 'None of these'.");
+        bot("Do you have any of the following? Select all that apply, type your own concern, or tap 'None of these'.");
+        return;
+      }
+
+      if (state === 3) {
+        // Free-text health concern alongside or instead of checkboxes
+        const flags = Array.isArray(p.health_flags) ? p.health_flags : [];
+        store.updateProfile({
+          health_flags: flags,
+          other_concerns: text,
+        });
+        store.setFlowState(4);
+        bot("What matters most to you in a contraceptive method? Tap a choice or type your own.");
         return;
       }
 
