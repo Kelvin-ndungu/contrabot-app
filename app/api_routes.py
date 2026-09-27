@@ -11,7 +11,6 @@ from app.api_schemas import (
     WebRecommendResponse,
     MethodRecommendation,
     SafetyElimination,
-    SideEffectItem,
 )
 from engine.models import UserProfile, OutcomeLog, ReferralCreate, ReferralClaim, HandoffCreate
 from engine.method_catalog import build_method_payload, all_methods_list
@@ -63,14 +62,35 @@ def _fallback_chat_reply(message: str) -> str:
             "you should be checked at a clinic promptly."
         )
     if "clinic" in text or "facility" in text:
-        return "Use the clinic finder to look for nearby family planning services, or speak with a CHW for referral support."
+        return "A nearby health facility or community health worker can help you find family planning services."
     return (
         "I can help with contraception options, side effects, breastfeeding considerations, and clinic access. "
-        "For a personalized recommendation, start the guided consultation and answer the five quick questions."
+        "For a personalized recommendation, tap \"Get a recommendation\" and answer the questions."
     )
 
 
+LANGUAGE_NAMES = {"en": "english", "sw": "kiswahili", "lg": "luganda", "fr": "french"}
+
+
+def _language_name(code: str) -> str:
+    return LANGUAGE_NAMES.get(code, code)
+
+
 def _to_user_profile(body: WebRecommendRequest) -> UserProfile:
+    if body.triage:
+        t = body.triage
+        return UserProfile(
+            **t.model_dump(),
+            # Coarse flags stay off: the detailed rules replace them.
+            breastfeeding=t.breastfeeding_mode in ("exclusive", "partial") and t.postpartum not in (None, "none"),
+            health_risk=False,
+            preference="long_acting" if set(t.comfortable_with) & {"implant", "iud", "injection"} else "daily",
+            clinic_access=True,
+            language=_language_name(body.language),
+            district=body.district,
+            channel="web",
+        )
+
     health_risk = any(f in RED_FLAG_FLAGS for f in body.health_flags)
     clinic_access = body.access == "clinic"
     return UserProfile(
@@ -80,7 +100,7 @@ def _to_user_profile(body: WebRecommendRequest) -> UserProfile:
         preference=PREF_MAP.get(body.preference, "daily"),
         clinic_access=clinic_access,
         parity=body.parity,
-        language=body.language,
+        language=_language_name(body.language),
         district=body.district,
         channel="web",
     )
@@ -91,21 +111,31 @@ def api_recommend(body: WebRecommendRequest):
     profile = _to_user_profile(body)
     result = run_recommendation(profile)
 
+    safety = result.safety
     recommendations = []
-    for scored in result.ranked_methods[:2]:
-        mec_cat = result.safety.mec_categories.get(scored.method, 1)
+    for scored in result.ranked_methods[:3]:
+        mec_cat = safety.mec_categories.get(scored.method, 1)
         payload = build_method_payload(scored.method, mec_category=mec_cat)
+        if mec_cat == 2:
+            payload["caution"] = safety.reasons.get(scored.method)
+            payload["caution_code"] = safety.reason_codes.get(scored.method)
         recommendations.append(MethodRecommendation(**payload))
 
-    eliminations = []
-    for method_id in result.safety.eliminated:
-        reason = next((w for w in result.safety.warnings if method_id in w.lower()), f"MEC category {result.safety.mec_categories.get(method_id, 3)}")
-        eliminations.append(SafetyElimination(method=method_id, reason=reason or "Not recommended for this profile"))
+    eliminations = [
+        SafetyElimination(
+            method=method_id,
+            reason=safety.reasons.get(method_id, "Not recommended for this profile"),
+            reason_code=safety.reason_codes.get(method_id),
+            mec_category=safety.mec_categories.get(method_id, 3),
+        )
+        for method_id in safety.eliminated
+    ]
 
     return WebRecommendResponse(
         recommendations=recommendations,
         safety_eliminations=eliminations,
         recommendation_text=result.recommendation_text,
+        alerts=safety.alerts,
     )
 
 
@@ -119,7 +149,21 @@ def api_chat(body: WebChatRequest):
         reply = chat_completion(
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": f"Context:\n{context}\n\nUser ({body.language}): {body.message}"},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Context:\n{context}\n\n"
+                        # The triage summary lets answers take the user's health profile into account.
+                        + (f"User's triage summary: {body.context['triage_summary']}\n\n" if body.context and body.context.get("triage_summary") else "")
+                        + (
+                            f"The user is watching a 3D explainer for {body.context.get('method_title') or body.context.get('method')}. "
+                            "Keep answers short (2–4 sentences), method-focused, and practical.\n\n"
+                            if body.context and body.context.get("mode") == "explainer_3d"
+                            else ""
+                        )
+                        + f"Reply in {_language_name(body.language)}.\nUser: {body.message}"
+                    ),
+                },
             ],
             max_tokens=400,
             temperature=0.6,
@@ -229,7 +273,6 @@ def api_create_handoff(body: HandoffCreate):
     )
     if not row:
         raise HTTPException(status_code=400, detail="Could not create handoff — check WhatsApp number")
-    # Never return raw phone; only code + optional CHW notify text for server-side senders
     return {
         "id": row["id"],
         "code": row["code"],
@@ -251,3 +294,4 @@ def api_referral_contact(referral_id: int):
     if not data:
         raise HTTPException(status_code=404, detail="Referral not found")
     return data
+

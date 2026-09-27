@@ -1,13 +1,15 @@
 import { Helmet } from "react-helmet-async";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Lock, ListChecks, Sparkles, MapPin } from "lucide-react";
+import { Lock, ListChecks, Sparkles, MapPin, Hash } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { WhatsAppLink } from "@/components/WhatsAppLink";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAppStore } from "@/store/useAppStore";
+
+const USSD_CODE = import.meta.env.VITE_USSD_CODE || "*384*51567#";
 
 export default function LandingPage() {
   const { t } = useTranslation();
@@ -44,7 +46,17 @@ export default function LandingPage() {
               {t("startCta")}
             </Button>
             <WhatsAppLink label={t("whatsappCta")} />
+            <a
+              href={`tel:${USSD_CODE.replace(/#/g, "%23")}`}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#2B7A9E] to-[#5C4F9E] px-5 py-2.5 text-sm font-semibold text-white shadow-md transition hover:opacity-90"
+            >
+              <Hash className="h-4 w-4" />
+              Dial {USSD_CODE}
+            </a>
           </div>
+          <p className="mx-auto mt-4 max-w-lg text-sm text-muted">
+            Chat on the web, WhatsApp, or USSD — same triage or ask-a-question flow on any phone.
+          </p>
           <div className="mt-8 flex flex-wrap justify-center gap-6 text-sm text-muted">
             <span>🔒 {t("trustPrivate")}</span>
             <span>🌍 {t("trustLang")}</span>

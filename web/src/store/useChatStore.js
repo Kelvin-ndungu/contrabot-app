@@ -1,44 +1,43 @@
 import { create } from "zustand";
 
-const initialProfile = {
-  age_group: null,
-  breastfeeding: null,
-  health_flags: [],
-  preference: null,
-  access: null,
-};
-
-export const useChatStore = create((set, get) => ({
-  flowState: 0,
+// Nothing here is persisted: answers are gone when the tab closes.
+const freshTriage = () => ({
+  stepId: "welcome", // current triage step, "welcome", "retry", or null when finished
+  outcome: null, // "recommended" | "pregnant" | "underage" once the triage ends
+  answers: {},
   messages: [],
-  profile: { ...initialProfile },
-  recommendations: null,
+  recommendation: null,
   loading: false,
-  loadingStep: 0,
+});
+
+const freshAsk = () => ({
+  askMessages: [],
+  askLoading: false,
   sessionId: `web-${Date.now()}`,
-  sideEffectFlow: null,
+});
 
-  addMessage: (msg) => set((s) => ({ messages: [...s.messages, { ...msg, id: `${Date.now()}-${Math.random()}` }] })),
+let messageSeq = 0;
+const timestamp = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const stamp = (msg) => ({ id: ++messageSeq, timestamp: timestamp(), kind: "text", ...msg });
 
-  setFlowState: (flowState) => set({ flowState }),
+export const useChatStore = create((set) => ({
+  doctor: null, // "amara" | "kofi"
+  ...freshTriage(),
+  ...freshAsk(),
 
-  updateProfile: (patch) => set((s) => ({ profile: { ...s.profile, ...patch } })),
+  setDoctor: (doctor) => set({ doctor }),
+  setStep: (stepId) => set({ stepId }),
+  setOutcome: (outcome) => set({ outcome, stepId: null }),
+  setLoading: (loading) => set({ loading }),
+  setRecommendation: (recommendation) => set({ recommendation }),
+  setAnswer: (stepId, values) => set((s) => ({ answers: { ...s.answers, [stepId]: values } })),
+  setAskLoading: (askLoading) => set({ askLoading }),
 
-  setRecommendations: (recommendations) => set({ recommendations }),
+  // A message is { role: "bot" | "user", kind, ... }. Text is stored per language so the
+  // conversation re-renders when the user switches between English and Kiswahili.
+  addMessage: (msg) => set((s) => ({ messages: [...s.messages, stamp(msg)] })),
+  addAskMessage: (msg) => set((s) => ({ askMessages: [...s.askMessages, stamp(msg)] })),
 
-  setLoading: (loading, loadingStep = 0) => set({ loading, loadingStep }),
-
-  setSideEffectFlow: (sideEffectFlow) => set({ sideEffectFlow }),
-
-  reset: () =>
-    set({
-      flowState: 0,
-      messages: [],
-      profile: { ...initialProfile },
-      recommendations: null,
-      loading: false,
-      loadingStep: 0,
-      sessionId: `web-${Date.now()}`,
-      sideEffectFlow: null,
-    }),
+  // Starting over keeps the chosen doctor.
+  resetTriage: () => set(freshTriage()),
 }));

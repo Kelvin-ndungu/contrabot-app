@@ -1,145 +1,107 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Check, Info, Shield, Compass, Users } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { useAppStore } from "@/store/useAppStore";
-import { createReferral } from "@/api/client";
+import { AlertTriangle, Info, ShieldCheck, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ALERT_TEXT, CARD_TEXT, MEC_LABEL, METHOD_TEXT, REASON_SW } from "@/lib/triage";
 
-export function RecommendationCard({ data, onShowVisualization }) {
-  const navigate = useNavigate();
-  const setSelectedMethods = useAppStore((s) => s.setSelectedMethods);
-  const [district, setDistrict] = useState("");
-  const [referralState, setReferralState] = useState({ loading: false, code: null, error: null });
+// Reasons that only say a method doesn't apply (e.g. LAM when there's no baby) are left out.
+const NOT_APPLICABLE = new Set(["female_only", "lam_over_6m", "lam_not_breastfeeding"]);
+const URGENT_ALERTS = new Set(["emergency_contraception", "pregnancy_test", "pregnant"]);
 
+const methodName = (m, l) => METHOD_TEXT[m.method]?.[l][0] ?? m.name;
+const methodBlurb = (m, l) => METHOD_TEXT[m.method]?.[l][1] ?? m.description;
+const reasonText = (code, english, l) => (l === "sw" && REASON_SW[code]) || english;
+
+export function RecommendationCard({ data, l, onShowVisualization }) {
+  const txt = CARD_TEXT[l];
   if (!data?.recommendations?.length) return null;
 
-  const requestChw = async () => {
-    const d = district.trim();
-    if (!d) {
-      setReferralState({ loading: false, code: null, error: "Enter your district first." });
-      return;
-    }
-    setReferralState({ loading: true, code: null, error: null });
-    try {
-      const row = await createReferral({
-        district: d,
-        channel: "web",
-        method_interest: data.recommendations[0]?.method,
-        notes: "Requested from web recommendation card",
-      });
-      setReferralState({ loading: false, code: row.code, error: null });
-    } catch {
-      setReferralState({ loading: false, code: null, error: "Could not create referral. Try again." });
-    }
-  };
+  const ruledOut = (data.safety_eliminations || []).filter((e) => !NOT_APPLICABLE.has(e.reason_code));
 
   return (
-    <div className="w-full bg-white/5 border-t-[3px] border-t-[#0E7A80] border-x border-b border-white/5 rounded-2xl p-5 shadow-2xl space-y-5">
-      <div className="flex items-center justify-between border-b border-white/5 pb-3">
-        <div className="flex items-center gap-2">
-          <Shield className="h-5 w-5 text-teal-400" />
-          <h3 className="font-bold text-white text-base">Your Top Matches</h3>
-        </div>
-        <Badge variant="outline" className="bg-[#2E7D32]/10 border-[#2E7D32]/30 text-[#2E7D32] flex items-center gap-1 font-bold text-[10px]">
-          <Check className="h-3 w-3" /> WHO Screened
-        </Badge>
+    <div className="w-full space-y-4 rounded-3xl border border-[#E3ECEB] bg-white p-5 shadow-[0_4px_24px_rgba(16,60,60,0.08)]">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-2 text-lg font-bold text-ink">
+          <ShieldCheck className="h-5 w-5 text-[#0E8C85]" aria-hidden /> {txt.title}
+        </h3>
+        <span className="rounded-full bg-[#E8F6F4] px-3 py-1 text-xs font-semibold text-[#0E7A80]">{txt.screened}</span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {data.recommendations.map((m) => (
+      {(data.alerts || []).map((code) => {
+        const alert = ALERT_TEXT[code]?.[l];
+        if (!alert) return null;
+        const urgent = URGENT_ALERTS.has(code);
+        return (
           <div
-            key={m.method}
-            className="bg-[#0E7A80]/8 border border-[#0E7A80]/15 rounded-xl p-4 flex flex-col justify-between hover:border-[#0E7A80]/30 transition-all duration-300 shadow-md"
-          >
-            <div className="space-y-2.5">
-              <h4 className="font-bold text-white text-base leading-tight">{m.name}</h4>
-              <p className="text-xs text-[#7A9BA8] leading-relaxed line-clamp-3">{m.description}</p>
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                <Badge variant="outline" className="bg-[#2E7D32]/10 border-[#2E7D32]/20 text-green-400 text-[10px] py-0 px-2 font-medium">
-                  {Math.round(m.effectiveness_typical * 100)}% Effective
-                </Badge>
-                <Badge variant="outline" className="bg-[#0E7A80]/15 border-[#0E7A80]/20 text-[#4DD6DC] text-[10px] py-0 px-2 font-medium">
-                  {m.duration}
-                </Badge>
-                <Badge variant="outline" className="bg-[#5C3C7A]/20 border-[#5C3C7A]/40 text-[#A855F7] text-[10px] py-0 px-2 font-medium">
-                  {m.access_required}
-                </Badge>
-              </div>
-            </div>
-
-            {onShowVisualization && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-4 w-full border-[#0E7A80]/50 text-[#4DD6DC] bg-[#0E7A80]/5 hover:bg-[#0E7A80]/20 hover:text-white transition-all text-xs font-semibold"
-                onClick={() => onShowVisualization(m.method)}
-              >
-                See how it works →
-              </Button>
+            key={code}
+            className={cn(
+              "flex gap-3 rounded-2xl border p-3.5 text-sm",
+              urgent ? "border-[#F2B8A2] bg-[#FDF1EC] text-[#7A2E12]" : "border-[#CFE7E4] bg-[#F1FAF8] text-[#0F4F4B]"
             )}
-          </div>
-        ))}
-      </div>
-
-      <div className="bg-[#E07B39]/10 border border-[#E07B39]/30 rounded-xl p-3.5 flex items-start gap-2.5">
-        <Info className="h-4.5 w-4.5 text-[#E07B39] shrink-0 mt-0.5" />
-        <p className="text-xs text-[#E8F4F5] leading-relaxed">
-          <strong className="text-[#E07B39] font-bold">Important:</strong> Please confirm with your nearest clinic or community health worker before starting any contraceptive method.
-        </p>
-      </div>
-
-      <div className="rounded-xl border border-[#0E7A80]/25 bg-[#0E7A80]/10 p-3.5 space-y-3">
-        <p className="text-xs font-semibold text-white flex items-center gap-2">
-          <Users className="h-4 w-4 text-teal-300" /> Request CHW follow-up
-        </p>
-        <p className="text-[11px] text-[#7A9BA8]">
-          We create an anonymous code for a CHW in your district. No phone number is stored.
-        </p>
-        <div className="flex flex-col sm:flex-row gap-2">
-          <Input
-            value={district}
-            onChange={(e) => setDistrict(e.target.value)}
-            placeholder="Your district (e.g. Nairobi)"
-            className="bg-[#0D1B2A] border-[#0E7A80]/30 text-white placeholder:text-[#7A9BA8]"
-          />
-          <Button
-            type="button"
-            disabled={referralState.loading}
-            onClick={requestChw}
-            className="bg-[#25D366] hover:bg-[#1ebe57] text-white font-bold text-xs whitespace-nowrap"
           >
-            {referralState.loading ? "Sending…" : "Request CHW"}
-          </Button>
-        </div>
-        {referralState.code && (
-          <p className="text-xs text-teal-200">
-            Tell your CHW this code: <strong className="font-mono text-white text-sm">{referralState.code}</strong>
-          </p>
-        )}
-        {referralState.error && <p className="text-xs text-[#E07B39]">{referralState.error}</p>}
-      </div>
+            {urgent ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> : <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
+            <p><strong className="block font-semibold">{alert[0]}</strong>{alert[1]}</p>
+          </div>
+        );
+      })}
 
-      <div className="flex flex-col sm:flex-row gap-3 pt-1">
-        <Button
-          onClick={() => navigate("/facilities")}
-          className="flex-1 bg-[#0E7A80] hover:bg-[#0A6268] text-white font-bold text-xs py-2.5 shadow-lg shadow-[#0E7A80]/20 transition-all flex items-center justify-center gap-1.5 rounded-xl"
-        >
-          <Compass className="h-4 w-4" /> Find Nearest Clinic
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setSelectedMethods(data.recommendations.map((r) => r.method));
-            navigate(`/compare?methods=${data.recommendations.map((r) => r.method).join(",")}`);
-          }}
-          className="flex-1 border-[#5C3C7A]/60 text-[#D8B4FE] bg-[#5C3C7A]/10 hover:bg-[#5C3C7A]/25 hover:text-white transition-all text-xs font-semibold rounded-xl"
-        >
-          Compare All Matches
-        </Button>
-      </div>
+      <ol className="grid gap-3">
+        {data.recommendations.map((m, i) => (
+          <li key={m.method} className="rounded-2xl border border-[#E3ECEB] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <h4 className="text-base font-bold text-ink">
+                <span className="mr-2 text-[#0E8C85] tabular-nums">{i + 1}.</span>
+                {methodName(m, l)}
+              </h4>
+              <span
+                className={cn(
+                  "rounded-full px-2.5 py-0.5 text-xs font-semibold",
+                  m.mec_category === 1 ? "bg-[#E6F4EA] text-[#1E6B3A]" : "bg-[#FBF3D6] text-[#7A5B0E]"
+                )}
+              >
+                {MEC_LABEL[m.mec_category]?.[l]}
+              </span>
+            </div>
+            <p className="mt-1.5 text-sm text-muted">{methodBlurb(m, l)}</p>
+            <p className="mt-2 text-xs font-medium text-ink/70 tabular-nums">
+              {m.duration} · {txt.pregnancyRate(Math.max(0, Math.round((1 - m.effectiveness_typical) * 100)) || "<1")}
+            </p>
+            {m.caution && (
+              <p className="mt-2 flex gap-1.5 text-sm text-[#7A5B0E]">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                {reasonText(m.caution_code, m.caution, l)}
+              </p>
+            )}
+            {onShowVisualization && (
+              <button
+                type="button"
+                onClick={() => onShowVisualization(m.method)}
+                className="mt-3 text-sm font-semibold text-[#0E7A80] underline-offset-4 hover:underline"
+              >
+                {txt.howItWorks} →
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+
+      {ruledOut.length > 0 && (
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted">{txt.notForYou}</p>
+          <ul className="grid gap-1.5">
+            {ruledOut.map((e) => (
+              <li key={e.method} className="flex gap-2 text-sm text-ink/80">
+                <X className="mt-0.5 h-4 w-4 shrink-0 text-[#B3261E]" aria-hidden />
+                <span>
+                  <strong className="font-semibold">{METHOD_TEXT[e.method]?.[l][0] ?? e.method}</strong>
+                  {": "}
+                  {reasonText(e.reason_code, e.reason, l)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <p className="rounded-2xl bg-[#FDF6EC] px-4 py-3 text-sm text-[#6B4A12]">{txt.confirm}</p>
     </div>
   );
 }

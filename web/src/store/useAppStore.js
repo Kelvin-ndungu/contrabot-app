@@ -6,10 +6,6 @@ export const useAppStore = create(
     (set) => ({
       language: "en",
       setLanguage: (language) => set({ language }),
-      prefillChat: null,
-      setPrefillChat: (prefillChat) => set({ prefillChat }),
-      selectedMethods: [],
-      setSelectedMethods: (selectedMethods) => set({ selectedMethods }),
     }),
     { name: "contrabot-web-app" }
   )

@@ -1,177 +1,147 @@
-import { useCallback } from "react";
 import { postRecommend, postChat } from "@/api/client";
 import { useChatStore } from "@/store/useChatStore";
 import { useAppStore } from "@/store/useAppStore";
-import { AGE_MAP, PREF_MAP, ACCESS_MAP, HEALTH_FLAG_MAP } from "@/lib/constants";
+import { BOT, buildTriagePayload, getStep, lang, looksSwahili, nextStepId, one, triageSummary } from "@/lib/triage";
 
-function now() {
-  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const SENSITIVE_STEPS = new Set(["health", "preg_check", "unprotected", "meds"]);
+const store = () => useChatStore.getState();
+const bot = (msg) => store().addMessage({ role: "bot", ...msg });
+
+let ackTurn = 0;
+function ack(prevStepId) {
+  if (SENSITIVE_STEPS.has(prevStepId)) return BOT.sensitiveAck;
+  ackTurn = (ackTurn + 1) % BOT.acks.en.length;
+  return { en: BOT.acks.en[ackTurn], sw: BOT.acks.sw[ackTurn] };
 }
 
-export function useChatFlow() {
-  const store = useChatStore();
-  const language = useAppStore((s) => s.language);
+function askStep(stepId, prefix) {
+  store().setStep(stepId);
+  bot({ kind: "question", stepId, prefix });
+}
 
-  const bot = useCallback(
-    (text, extra = {}) => {
-      store.addMessage({ role: "bot", text, timestamp: now(), ...extra });
-    },
-    [store]
-  );
+// Short replies to specific answers, shown before the next question.
+function reactions(stepId, values) {
+  const v = one(values);
+  if (stepId === "unprotected" && v === "yes") return [BOT.emergencyNow];
+  if (stepId === "preg_check" && values.length === 1 && v === "none") return [BOT.pregnancyUnsure];
+  return [];
+}
 
-  const user = useCallback(
-    (text) => {
-      store.addMessage({ role: "user", text, timestamp: now() });
-    },
-    [store]
-  );
+async function finishTriage() {
+  const s = store();
+  s.setStep(null);
+  s.setLoading(true);
+  bot({ text: BOT.checking });
+  try {
+    const data = await postRecommend({
+      triage: buildTriagePayload(s.answers),
+      language: useAppStore.getState().language,
+    });
+    s.setRecommendation(data);
+    bot({ text: BOT.recommendationIntro });
+    bot({ kind: "recommendation", data });
+    bot({ text: BOT.afterRecommendation });
+    s.setOutcome("recommended");
+  } catch {
+    s.setStep("retry");
+    bot({ text: BOT.recommendError });
+  } finally {
+    s.setLoading(false);
+  }
+}
 
-  const fetchRecommendation = useCallback(async () => {
-    store.setFlowState(6);
-    store.setLoading(true, 0);
-    bot("Reviewing your answers against WHO guidelines...");
+function answerStep(stepId, values) {
+  const s = store();
+  s.setAnswer(stepId, values);
+  s.addMessage({ role: "user", kind: "answer", stepId, values });
 
-    await new Promise((r) => setTimeout(r, 800));
-    store.setLoadingStep(1);
-    await new Promise((r) => setTimeout(r, 600));
-    store.setLoadingStep(2);
+  // Recommendations are for adults only.
+  if (stepId === "age" && one(values) === "u18") {
+    bot({ text: BOT.underAge });
+    s.setOutcome("underage");
+    return;
+  }
+  if (stepId === "preg_history" && one(values) === "now") {
+    bot({ text: BOT.pregnantNow });
+    s.setOutcome("pregnant");
+    return;
+  }
 
-    const p = store.profile;
-    const payload = {
-      age_group: AGE_MAP[p.age_group] || "25-34",
-      breastfeeding: p.breastfeeding === "Yes",
-      health_flags: (p.health_flags || []).map((h) => HEALTH_FLAG_MAP[h]).filter(Boolean),
-      preference: PREF_MAP[p.preference] || "unsure",
-      access: ACCESS_MAP[p.access] || "clinic",
-      language,
-    };
+  const extra = reactions(stepId, values);
+  extra.forEach((text) => bot({ text }));
 
+  const next = nextStepId(store().answers, stepId);
+  if (next) askStep(next, extra.length ? null : ack(stepId));
+  else finishTriage();
+}
+
+// The triage is answered by tapping options only; there is no free text here.
+export function useTriageFlow() {
+  const start = () => {
+    const s = store();
+    if (s.messages.length) return;
+    s.setStep("welcome");
+    bot({ text: BOT.welcome });
+  };
+
+  const choose = (values) => {
+    const s = store();
+    if (s.stepId === "welcome") {
+      s.addMessage({ role: "user", kind: "text", text: values[0] === "what" ? BOT.startWhat : BOT.startYes });
+      if (values[0] === "what") bot({ text: BOT.about });
+      else askStep(nextStepId(s.answers, null));
+      return;
+    }
+    if (s.stepId === "retry") {
+      finishTriage();
+      return;
+    }
+    if (s.stepId && getStep(s.stepId)) answerStep(s.stepId, values);
+  };
+
+  const restart = () => {
+    store().resetTriage();
+    start();
+  };
+
+  return { start, choose, restart };
+}
+
+// Free questions on the /ask page, answered with the triage answers as context.
+export function useAskFlow() {
+  const add = (msg) => store().addAskMessage(msg);
+
+  const start = () => {
+    const s = store();
+    if (s.askMessages.length) return;
+    add({ role: "bot", text: s.outcome === "recommended" ? BOT.askWelcomeWithProfile : BOT.askWelcome });
+  };
+
+  const send = async (text) => {
+    const clean = text.trim();
+    if (!clean) return;
+    const s = store();
+    const app = useAppStore.getState();
+    add({ role: "user", text: clean });
+    if (looksSwahili(clean) && lang(app.language) === "en") {
+      app.setLanguage("sw");
+      add({ role: "bot", text: BOT.switchedToSwahili });
+    }
+    s.setAskLoading(true);
     try {
-      const data = await postRecommend(payload);
-      store.setRecommendations(data);
-      useAppStore.getState().setSelectedMethods(data.recommendations.map((r) => r.method));
-      store.setLoading(false);
-      store.setFlowState(7);
-      store.addMessage({ role: "bot", type: "recommendation", data, timestamp: now() });
-      store.setFlowState(8);
-      bot("Is there anything else I can help with?");
+      const res = await postChat({
+        message: clean,
+        session_id: s.sessionId,
+        language: useAppStore.getState().language,
+        context: { mode: "question", triage_summary: triageSummary(s.answers) },
+      });
+      add({ role: "bot", text: res.reply });
     } catch {
-      store.setLoading(false);
-      bot("Sorry, I couldn't load your recommendation. Please try again in a moment.");
+      add({ role: "bot", text: BOT.askError });
+    } finally {
+      s.setAskLoading(false);
     }
-  }, [store, bot, language]);
+  };
 
-  const handleQuickReply = useCallback(
-    async (text) => {
-      user(text);
-      const state = store.flowState;
-      const p = store.profile;
-
-      if (state === 0) {
-        if (text.includes("What is this")) {
-          bot("ContraBot gives free, private contraception guidance based on WHO guidelines. Ready to answer 5 quick questions?");
-          return;
-        }
-        store.setFlowState(1);
-        bot("How old are you?");
-        return;
-      }
-
-      if (state === 1) {
-        store.updateProfile({ age_group: text });
-        store.setFlowState(2);
-        bot("Are you currently breastfeeding a baby under 6 months old?");
-        return;
-      }
-
-      if (state === 2) {
-        store.updateProfile({ breastfeeding: text });
-        store.setFlowState(3);
-        bot("Do you have any of the following? Select all that apply, or tap 'None of these'.");
-        return;
-      }
-
-      if (state === 4) {
-        store.updateProfile({ preference: text });
-        store.setFlowState(5);
-        bot("How easily can you access healthcare?");
-        return;
-      }
-
-      if (state === 5) {
-        store.updateProfile({ access: text });
-        await fetchRecommendation();
-        return;
-      }
-
-      if (state === 8) {
-        if (text === "Side effect help") {
-          store.setSideEffectFlow({ step: "method" });
-          bot("Which method are you using?");
-          return;
-        }
-        if (text === "I'm already on a method") {
-          store.setSideEffectFlow({ step: "current_method" });
-          bot("Which method are you using?");
-          return;
-        }
-        if (text === "Start over") {
-          store.reset();
-          bot("Hi 👋 I'm ContraBot, your private contraception guide. I'll ask you 5 quick questions and suggest the best options for you. Everything is confidential. Ready?");
-          return;
-        }
-        if (text === "Find a clinic") {
-          bot("Head to the clinic finder — tap the menu or visit the Facilities page.");
-          return;
-        }
-      }
-
-      const se = store.sideEffectFlow;
-      if (se?.step === "method") {
-        store.setSideEffectFlow({ ...se, method: text, step: "symptoms" });
-        bot("What are you experiencing? Describe in your own words.");
-        return;
-      }
-      if (se?.step === "symptoms") {
-        try {
-          const res = await postChat({
-            message: `Side effects on ${se.method}: ${text}`,
-            session_id: store.sessionId,
-            language,
-            context: { mode: "side_effects" },
-          });
-          store.addMessage({
-            role: "bot",
-            type: "side_effect",
-            text: res.reply,
-            timestamp: now(),
-          });
-          store.setSideEffectFlow(null);
-        } catch {
-          bot("I couldn't fetch guidance right now. If symptoms are severe, please visit a clinic.");
-        }
-        return;
-      }
-      if (se?.step === "current_method") {
-        store.setSideEffectFlow({ ...se, method: text, step: "duration" });
-        bot("How long have you been using it?");
-        return;
-      }
-      if (se?.step === "duration") {
-        bot(
-          `Thank you for sharing. Continuing ${se.method} can be safe for many women. If anything worries you, a clinic visit is always okay — you deserve good care.`
-        );
-        store.setSideEffectFlow(null);
-      }
-    },
-    [store, user, bot, fetchRecommendation, language]
-  );
-
-  const initWelcome = useCallback(() => {
-    if (store.messages.length === 0) {
-      bot("Hi 👋 I'm ContraBot, your private contraception guide. I'll ask you 5 quick questions and suggest the best options for you. Everything is confidential. Ready?");
-    }
-  }, [store.messages.length, bot]);
-
-  return { handleQuickReply, initWelcome, fetchRecommendation };
+  return { start, send };
 }

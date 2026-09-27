@@ -14,7 +14,7 @@ export default {
         line: "#E5E7EB",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
+        sans: ["\"Plus Jakarta Sans\"", "Inter", "system-ui", "sans-serif"],
       },
       borderRadius: {
         xl: "0.75rem",

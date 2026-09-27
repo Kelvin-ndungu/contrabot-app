@@ -59,8 +59,21 @@ async def health():
 @app.post("/ussd")
 @app.get("/ussd")
 async def ussd_webhook(request: Request):
-    form = await request.form()
+    """Africa's Talking USSD callback. Expects sessionId, phoneNumber, text."""
     params = request.query_params
+    form = {}
+    try:
+        form = await request.form()
+    except Exception:
+        # Fallback when python-multipart is missing or body is raw
+        try:
+            raw = (await request.body()).decode("utf-8", errors="ignore")
+            from urllib.parse import parse_qs
+
+            parsed = {k: v[0] for k, v in parse_qs(raw).items()}
+            form = parsed
+        except Exception:
+            form = {}
 
     session_id = form.get("sessionId") or params.get("sessionId")
     phone_number = form.get("phoneNumber") or params.get("phoneNumber")
@@ -69,7 +82,12 @@ async def ussd_webhook(request: Request):
     if not session_id or not phone_number:
         return PlainTextResponse("END Missing required USSD parameters.", media_type="text/plain")
 
-    return handle_ussd_input(session_id, text, phone_number)
+    try:
+        return handle_ussd_input(str(session_id), str(text), str(phone_number))
+    except Exception as exc:
+        print(f"USSD error: {exc}")
+        return PlainTextResponse("END Sorry, service error. Please try again.", media_type="text/plain")
+
 
 
 @app.get("/whatsapp")

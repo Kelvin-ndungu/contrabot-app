@@ -10,11 +10,9 @@
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.0.5",
-    "@radix-ui/react-label": "^2.0.2",
-    "@radix-ui/react-progress": "^1.0.3",
-    "@radix-ui/react-select": "^2.0.0",
     "@radix-ui/react-slot": "^1.0.2",
-    "@radix-ui/react-tabs": "^1.0.4",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
     "axios": "^1.6.7",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
@@ -22,11 +20,10 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-helmet-async": "^2.0.4",
-    "react-i18next": "^14.0.5",
     "react-router-dom": "^6.22.0",
-    "recharts": "^2.12.0",
     "tailwind-merge": "^2.2.1",
-    "i18next": "^23.10.0",
+    "three": "^0.162.0",
+    "three-stdlib": "^2.36.1",
     "zustand": "^4.5.0"
   },
   "devDependencies": {

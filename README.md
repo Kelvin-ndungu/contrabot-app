@@ -108,7 +108,15 @@ Includes 10 profile edge cases in `tests/test_engine_e2e.py` and safety screen u
 
 ## USSD Flow
 
-Welcome → Language → Age → Breastfeeding → Health flags → Preference → Clinic access → District → Recommendation → Find clinic
+Callback: `POST/GET /ussd` (Africa's Talking). Sandbox code example: `*384*51567#`.
+
+1. **Mode** — `1` Get recommendation (triage) · `2` Ask a question (chat)
+2. **Language** — English / Kiswahili
+3. **Triage** — same question set as the web chat (sex, age, goal, pregnancy, health, meds, preferences, district, …)
+4. **Recommendation** — top safe methods + optional nearest clinic
+5. **Chat** — type a free-text question; reply `0` to end
+
+Keep your AT callback URL pointed at the public tunnel, e.g. `https://<ngrok-host>/ussd`.
 
 ## Manual Setup Checklist
 

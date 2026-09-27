@@ -173,12 +173,34 @@ class UserProfile(BaseModel):
     region: Optional[str] = None
     channel: str = "web"
 
+    # Detailed triage answers (web chat). None / empty means the channel didn't ask.
+    pregnancy_status: Optional[str] = None  # "not_pregnant", "unsure", "pregnant"
+    unprotected_sex_5d: bool = False
+    postpartum: Optional[str] = None  # "none", "lt48h", "2d_3w", "3_4w", "4_6w", "6w_6m"
+    breastfeeding_mode: Optional[str] = None  # "exclusive", "partial", "none"
+    periods_returned: Optional[bool] = None
+    blood_pressure: Optional[str] = None  # "normal", "controlled", "140_159", "160_plus", "unknown"
+    smoking: Optional[str] = None  # "no", "under_15", "15_plus"
+    conditions: list[str] = Field(default_factory=list)
+    medications: list[str] = Field(default_factory=list)
+    fertility_intent: Optional[str] = None  # "within_2y", "over_2y", "no_more", "unsure"
+    comfortable_with: list[str] = Field(default_factory=list)  # "pill", "injection", "implant", "iud", "condom"
+    bleeding_changes_ok: Optional[bool] = None
+    needs_privacy: bool = False
+    sti_protection: bool = False
+    clinic_visits: Optional[str] = None  # "easy", "sometimes", "hard"
+
 
 class SafetyScreenResult(BaseModel):
     eliminated: list[str]
     mec_categories: dict[str, int]
     warnings: list[str]
     eligible: list[str]
+    # Deciding reason per method: a stable code (translated by the web app) and its English text.
+    reason_codes: dict[str, str] = Field(default_factory=dict)
+    reasons: dict[str, str] = Field(default_factory=dict)
+    # Actions to raise before any method: "emergency_contraception", "pregnancy_test", ...
+    alerts: list[str] = Field(default_factory=list)
 
 
 class ScoredMethod(BaseModel):
@@ -210,16 +232,6 @@ class OutcomeLog(BaseModel):
     session_id: Optional[str] = None
 
 
-class ChatRequest(BaseModel):
-    message: str
-    session_id: Optional[str] = None
-    profile: Optional[UserProfile] = None
-
-
-class RecommendRequest(BaseModel):
-    profile: UserProfile
-
-
 class ReferralCreate(BaseModel):
     district: str
     channel: str = "web"
@@ -239,3 +251,14 @@ class HandoffCreate(BaseModel):
     notes: Optional[str] = None
     user_whatsapp: str
     consent: bool = False
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    profile: Optional[UserProfile] = None
+
+
+class RecommendRequest(BaseModel):
+    profile: UserProfile
+
