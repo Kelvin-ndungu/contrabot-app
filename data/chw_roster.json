@@ -1,0 +1,23 @@
+[
+  {
+    "chw_id": "CHW-NRB-01",
+    "name": "Mary Wanjiku",
+    "district": "Nairobi",
+    "whatsapp": "254712345001",
+    "active": true
+  },
+  {
+    "chw_id": "CHW-KSM-01",
+    "name": "Amina Otieno",
+    "district": "Kisumu",
+    "whatsapp": "254712345002",
+    "active": true
+  },
+  {
+    "chw_id": "CHW-KLA-01",
+    "name": "Grace Namukasa",
+    "district": "Kampala",
+    "whatsapp": "256700000001",
+    "active": true
+  }
+]

@@ -13,11 +13,19 @@ from app.api_schemas import (
     SafetyElimination,
     SideEffectItem,
 )
-from engine.models import UserProfile, OutcomeLog
+from engine.models import UserProfile, OutcomeLog, ReferralCreate, ReferralClaim, HandoffCreate
 from engine.method_catalog import build_method_payload, all_methods_list
 from engine.pipeline import run_recommendation
 from engine.recommender import load_system_prompt
 from services.facilities import find_nearest_facilities, get_outcome_analytics, log_outcome
+from services.referrals import (
+    create_referral,
+    create_live_handoff,
+    list_referrals,
+    update_referral,
+    referral_counts,
+    get_referral_contact_link,
+)
 from services.knowledge import query_all_collections
 from app.openai_client import chat_completion
 
@@ -38,6 +46,28 @@ PREF_MAP = {
     "non_hormonal": "non_hormonal",
     "unsure": "daily",
 }
+
+
+def _fallback_chat_reply(message: str) -> str:
+    text = message.lower()
+    if "breast" in text:
+        return (
+            "If you are breastfeeding, options that are often considered include lactational amenorrhea "
+            "in the first 6 months when strict criteria are met, progestogen-only pills, implants, injectables, "
+            "IUDs, and condoms. A clinic or CHW should confirm what is safest for your health history."
+        )
+    if "side effect" in text or "bleeding" in text:
+        return (
+            "Some side effects, such as irregular bleeding or mild headaches, can happen with hormonal methods "
+            "and may settle with time. Heavy bleeding, severe pain, chest pain, fainting, or symptoms that worry "
+            "you should be checked at a clinic promptly."
+        )
+    if "clinic" in text or "facility" in text:
+        return "Use the clinic finder to look for nearby family planning services, or speak with a CHW for referral support."
+    return (
+        "I can help with contraception options, side effects, breastfeeding considerations, and clinic access. "
+        "For a personalized recommendation, start the guided consultation and answer the five quick questions."
+    )
 
 
 def _to_user_profile(body: WebRecommendRequest) -> UserProfile:
@@ -95,7 +125,7 @@ def api_chat(body: WebChatRequest):
             temperature=0.6,
         )
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        reply = _fallback_chat_reply(body.message)
 
     quick = []
     if body.context and body.context.get("mode") == "side_effects":
@@ -136,12 +166,88 @@ def api_methods():
 
 @router.post("/outcomes")
 def api_outcomes(body: OutcomeLog):
-    ok = log_outcome(body.district, body.recommended_method, body.accepted, body.chosen_method, body.notes)
+    ok = log_outcome(
+        body.district,
+        body.recommended_method,
+        body.accepted,
+        body.chosen_method,
+        body.notes,
+        chw_id=body.chw_id,
+        followup=body.followup,
+        followup_at=body.followup_at,
+        session_id=body.session_id,
+    )
     if not ok:
         raise HTTPException(status_code=500, detail="Could not log outcome")
     return {"status": "logged"}
 
 
 @router.get("/analytics/outcomes")
-def api_analytics():
-    return get_outcome_analytics()
+def api_analytics(district: str | None = None):
+    return get_outcome_analytics(district=district)
+
+
+@router.post("/referrals")
+def api_create_referral(body: ReferralCreate):
+    row = create_referral(
+        district=body.district,
+        channel=body.channel,
+        method_interest=body.method_interest,
+        notes=body.notes,
+    )
+    if not row:
+        raise HTTPException(status_code=500, detail="Could not create referral")
+    return row
+
+
+@router.get("/referrals")
+def api_list_referrals(district: str | None = None, status: str | None = "open", limit: int = 50):
+    return {
+        "referrals": list_referrals(district=district, status=status, limit=limit),
+        "counts": referral_counts(district=district),
+    }
+
+
+@router.patch("/referrals/{referral_id}")
+def api_update_referral(referral_id: int, body: ReferralClaim):
+    row = update_referral(referral_id, status=body.status, chw_id=body.chw_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Referral not found")
+    return row
+
+
+@router.post("/handoffs")
+def api_create_handoff(body: HandoffCreate):
+    if not body.consent:
+        raise HTTPException(status_code=400, detail="Consent is required for live CHW handoff")
+    row = create_live_handoff(
+        district=body.district,
+        user_whatsapp=body.user_whatsapp,
+        channel=body.channel,
+        method_interest=body.method_interest,
+        notes=body.notes,
+    )
+    if not row:
+        raise HTTPException(status_code=400, detail="Could not create handoff — check WhatsApp number")
+    # Never return raw phone; only code + optional CHW notify text for server-side senders
+    return {
+        "id": row["id"],
+        "code": row["code"],
+        "district": row["district"],
+        "status": row["status"],
+        "handoff": True,
+        "notified_chw_id": row.get("notified_chw_id"),
+        "chw": {"chw_id": (row.get("chw") or {}).get("chw_id"), "name": (row.get("chw") or {}).get("name")}
+        if row.get("chw")
+        else None,
+        "chw_whatsapp": (row.get("chw") or {}).get("whatsapp"),
+        "chw_notify_text": row.get("chw_notify_text"),
+    }
+
+
+@router.get("/referrals/{referral_id}/contact")
+def api_referral_contact(referral_id: int):
+    data = get_referral_contact_link(referral_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Referral not found")
+    return data

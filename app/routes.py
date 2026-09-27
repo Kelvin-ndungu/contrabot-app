@@ -2,9 +2,17 @@
 
 from fastapi import APIRouter, HTTPException
 
-from engine.models import ChatRequest, OutcomeLog, RecommendRequest, UserProfile, METHOD_LABELS, METHOD_METADATA
+from engine.models import ChatRequest, OutcomeLog, RecommendRequest, UserProfile, METHOD_LABELS, METHOD_METADATA, ReferralCreate, ReferralClaim, HandoffCreate
 from engine.pipeline import run_recommendation
 from services.facilities import find_nearest_facilities, format_facilities_message, get_outcome_analytics, log_outcome
+from services.referrals import (
+    create_referral,
+    create_live_handoff,
+    list_referrals,
+    update_referral,
+    referral_counts,
+    get_referral_contact_link,
+)
 from services.knowledge import query_all_collections
 from engine.recommender import load_system_prompt
 from app.openai_client import chat_completion
@@ -46,15 +54,90 @@ def facilities(district: str, country: str | None = None, limit: int = 3):
 
 @router.post("/outcomes")
 def outcomes(body: OutcomeLog):
-    ok = log_outcome(body.district, body.recommended_method, body.accepted, body.chosen_method, body.notes)
+    ok = log_outcome(
+        body.district,
+        body.recommended_method,
+        body.accepted,
+        body.chosen_method,
+        body.notes,
+        chw_id=body.chw_id,
+        followup=body.followup,
+        followup_at=body.followup_at,
+        session_id=body.session_id,
+    )
     if not ok:
         raise HTTPException(status_code=500, detail="Could not log outcome")
     return {"status": "logged"}
 
 
 @router.get("/analytics/outcomes")
-def analytics_outcomes():
-    return get_outcome_analytics()
+def analytics_outcomes(district: str | None = None):
+    return get_outcome_analytics(district=district)
+
+
+@router.post("/referrals")
+def referrals_create(body: ReferralCreate):
+    row = create_referral(
+        district=body.district,
+        channel=body.channel,
+        method_interest=body.method_interest,
+        notes=body.notes,
+    )
+    if not row:
+        raise HTTPException(status_code=500, detail="Could not create referral")
+    return row
+
+
+@router.get("/referrals")
+def referrals_list(district: str | None = None, status: str | None = "open", limit: int = 50):
+    return {
+        "referrals": list_referrals(district=district, status=status, limit=limit),
+        "counts": referral_counts(district=district),
+    }
+
+
+@router.patch("/referrals/{referral_id}")
+def referrals_update(referral_id: int, body: ReferralClaim):
+    row = update_referral(referral_id, status=body.status, chw_id=body.chw_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Referral not found")
+    return row
+
+
+@router.post("/handoffs")
+def handoffs_create(body: HandoffCreate):
+    if not body.consent:
+        raise HTTPException(status_code=400, detail="Consent is required for live CHW handoff")
+    row = create_live_handoff(
+        district=body.district,
+        user_whatsapp=body.user_whatsapp,
+        channel=body.channel,
+        method_interest=body.method_interest,
+        notes=body.notes,
+    )
+    if not row:
+        raise HTTPException(status_code=400, detail="Could not create handoff — check WhatsApp number")
+    return {
+        "id": row["id"],
+        "code": row["code"],
+        "district": row["district"],
+        "status": row["status"],
+        "handoff": True,
+        "notified_chw_id": row.get("notified_chw_id"),
+        "chw": {"chw_id": (row.get("chw") or {}).get("chw_id"), "name": (row.get("chw") or {}).get("name")}
+        if row.get("chw")
+        else None,
+        "chw_whatsapp": (row.get("chw") or {}).get("whatsapp"),
+        "chw_notify_text": row.get("chw_notify_text"),
+    }
+
+
+@router.get("/referrals/{referral_id}/contact")
+def referrals_contact(referral_id: int):
+    data = get_referral_contact_link(referral_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Referral not found")
+    return data
 
 
 @router.get("/methods/compare")

@@ -45,6 +45,39 @@ export async function getMethods() {
   return data;
 }
 
+export async function createReferral(payload) {
+  if (USE_MOCK) {
+    await delay(400);
+    return {
+      id: Date.now(),
+      code: `CB-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+      district: payload.district,
+      channel: payload.channel || "web",
+      method_interest: payload.method_interest,
+      status: "open",
+      created_at: new Date().toISOString(),
+    };
+  }
+  const { data } = await api.post("/api/referrals", payload);
+  return data;
+}
+
+export async function createHandoff(payload) {
+  if (USE_MOCK) {
+    await delay(500);
+    return {
+      id: Date.now(),
+      code: `CB-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+      district: payload.district,
+      handoff: true,
+      status: "open",
+      chw: { name: "Mary (demo)" },
+    };
+  }
+  const { data } = await api.post("/api/handoffs", payload);
+  return data;
+}
+
 function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }

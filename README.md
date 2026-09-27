@@ -147,3 +147,9 @@ docker-compose.yml
 | 9 Testing | pytest suite; device testing manual |
 
 faruoq: working on the bot
+
+## Recent docs
+
+- [CHW.md](CHW.md) — CHW dashboard roles & referrals
+- [CHW_HANDOFF.md](CHW_HANDOFF.md) — live CHW ↔ user handoff
+- [WHATSAPP.md](WHATSAPP.md) — Meta WhatsApp setup

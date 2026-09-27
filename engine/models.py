@@ -31,6 +31,20 @@ METHOD_LABELS = {
 }
 
 
+LOCAL_NAMES = {
+    ContraceptiveMethod.COC: ["vidonge", "pills", "pips"],
+    ContraceptiveMethod.POP: ["vidonge vya kunyonyesha", "pop"],
+    ContraceptiveMethod.INJECTABLE: ["sindano", "depo", "depo-provera"],
+    ContraceptiveMethod.IMPLANT: ["njiti", "kipandikizi", "implant"],
+    ContraceptiveMethod.IUD_COPPER: ["coil", "kitanzi", "iud"],
+    ContraceptiveMethod.IUD_LNG: ["hormonal coil", "kitanzi cha homoni"],
+    ContraceptiveMethod.CONDOM: ["mpira", "condom", "juala", "socks"],
+    ContraceptiveMethod.EMERGENCY: ["p2", "emergency pill", "dharura"],
+    ContraceptiveMethod.LAM: ["lam", "kunyonyesha"],
+    ContraceptiveMethod.STERILIZATION: ["kufunga kizazi", "vasectomy", "tubal ligation"],
+}
+
+
 METHOD_METADATA = {
     ContraceptiveMethod.COC: {
         "effectiveness": 0.91,
@@ -146,6 +160,8 @@ METHOD_METADATA = {
 
 
 class UserProfile(BaseModel):
+    name: Optional[str] = None
+    gender: str = "female"  # "female" or "male"
     age: int = Field(ge=10, le=55)
     breastfeeding: bool = False
     health_risk: bool = False  # hypertension, migraine with aura, or clot history
@@ -188,6 +204,10 @@ class OutcomeLog(BaseModel):
     accepted: bool
     chosen_method: Optional[str] = None
     notes: Optional[str] = None
+    chw_id: Optional[str] = None
+    followup: Optional[str] = None
+    followup_at: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -198,3 +218,24 @@ class ChatRequest(BaseModel):
 
 class RecommendRequest(BaseModel):
     profile: UserProfile
+
+
+class ReferralCreate(BaseModel):
+    district: str
+    channel: str = "web"
+    method_interest: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ReferralClaim(BaseModel):
+    chw_id: Optional[str] = None
+    status: str = "claimed"
+
+
+class HandoffCreate(BaseModel):
+    district: str
+    channel: str = "web"
+    method_interest: Optional[str] = None
+    notes: Optional[str] = None
+    user_whatsapp: str
+    consent: bool = False
