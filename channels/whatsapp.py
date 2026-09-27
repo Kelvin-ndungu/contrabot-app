@@ -211,6 +211,7 @@ def _normalize_button_input(text: str) -> str:
         "ask_more": "ask_more",
         "chw_yes": "chw_yes",
         "chw_no": "chw_no",
+        "pref_type": "pref_type",
     }
     return mapping.get(text.lower(), text)
 
@@ -332,6 +333,44 @@ async def _send_chw_referral(phone_number: str, session: dict) -> dict:
         )
     await send_text(phone_number, msg)
     return session
+
+def _health_multi_prompt(language: str) -> str:
+    if language == "kiswahili":
+        return (
+            "Chagua *yote* yanayokuhusu. Jibu kwa namba kama *1,3* "
+            "au andika kwa maneno yako:\n\n"
+            "1. Shinikizo la damu\n"
+            "2. Maumivu ya kichwa (migraine) yenye aura\n"
+            "3. Damu kuganda / DVT\n"
+            "4. Kisukari\n"
+            "5. Ugonjwa wa ini\n"
+            "6. Historia ya kansa ya matiti\n"
+            "0. Hakuna kati ya hizi"
+        )
+    return (
+        "Select *all* that apply. Reply with numbers like *1,3* "
+        "or type your own words:\n\n"
+        "1. High blood pressure\n"
+        "2. Migraine with aura\n"
+        "3. Blood clots / DVT\n"
+        "4. Diabetes\n"
+        "5. Liver disease\n"
+        "6. Breast cancer history\n"
+        "0. None of these"
+    )
+
+
+def _preference_multi_prompt(language: str) -> tuple[str, list[tuple[str, str]]]:
+    if language == "kiswahili":
+        return (
+            "Unapendelea nini? Chagua au *andika* unavyotaka:",
+            [("daily", "Kila siku"), ("long_acting", "Muda mrefu"), ("pref_type", "Nitaandika")],
+        )
+    return (
+        "What do you prefer? Tap a choice or *type* your own:",
+        [("daily", "Daily pill"), ("long_acting", "Long-acting"), ("pref_type", "I'll type")],
+    )
+
 
 async def send_welcome_intro(phone_number: str) -> bool:
     """Friendly first greeting before the language picker."""
@@ -639,30 +678,38 @@ async def handle_whatsapp_webhook(request: Request) -> JSONResponse:
         session_store.set(session_id, session, CHANNEL, ttl=1800)
 
         stage = session.get("stage")
-        if stage in ("gender", "breastfeeding", "health_flags", "preference", "access"):
-            lang = session.get("language", "english")
+        lang = session.get("language", "english")
+
+        # Multi-select health: WhatsApp buttons are single-tap only, so use numbered text.
+        if stage == "health_flags":
+            await send_text(phone_number, _health_multi_prompt(lang))
+            continue
+
+        if stage == "preference":
+            if session.get("awaiting_pref_text"):
+                await send_text(phone_number, reply)
+                continue
+            pref_body, pref_buttons = _preference_multi_prompt(lang)
+            await send_buttons(phone_number, pref_body, pref_buttons)
+            continue
+
+        if stage in ("gender", "breastfeeding", "access"):
             if lang == "sheng":
                 prompts = {
                     "gender": ("Jinsia yako ni gani msee?", [("female", "Dem"), ("male", "Chali")]),
                     "breastfeeding": ("Uko na mtoi ananyonya chini ya miezi sita?", [("breastfeeding_yes", "Ndio"), ("breastfeeding_no", "Zii")]),
-                    "health_flags": ("Uko na pressure, kichwa kuuma, au shida ya damu kuganda?", [("health_yes", "Ndio"), ("health_no", "Zii")]),
-                    "preference": ("Unataka chapo ya kila siku (vidonge) ama ile ya muda mrefu?", [("daily", "Kila siku"), ("long_acting", "Muda mrefu")]),
                     "access": ("Unaweza fika kliniki kupata huduma?", [("access_yes", "Ndio"), ("access_no", "Zii")]),
                 }
             elif lang == "kiswahili":
                 prompts = {
                     "gender": ("Je, jinsia yako ni gani?", [("female", "Kike"), ("male", "Kiume")]),
                     "breastfeeding": ("Je, unanyonyesha mtoto aliye chini ya miezi 6?", [("breastfeeding_yes", "Ndio"), ("breastfeeding_no", "La")]),
-                    "health_flags": ("Je, una shinikizo la damu, maumivu ya kichwa, au historia ya kuganda damu?", [("health_yes", "Ndio"), ("health_no", "La")]),
-                    "preference": ("Je, unapendelea vidonge vya kila siku au njia ya muda mrefu?", [("daily", "Kila siku"), ("long_acting", "Muda mrefu")]),
                     "access": ("Je, unaweza kutembelea kliniki kwa huduma?", [("access_yes", "Ndio"), ("access_no", "La")]),
                 }
             else:
                 prompts = {
                     "gender": ("What is your gender?", [("female", "Female"), ("male", "Male")]),
                     "breastfeeding": ("Breastfeeding baby under 6 months?", [("breastfeeding_yes", "Yes"), ("breastfeeding_no", "No")]),
-                    "health_flags": ("Hypertension, migraine w/ aura, or blood clots?", [("health_yes", "Yes"), ("health_no", "No")]),
-                    "preference": ("Prefer daily pill or set-and-forget?", [("daily", "Daily pill"), ("long_acting", "Set-and-forget")]),
                     "access": ("Can you visit a clinic for FP services?", [("access_yes", "Yes"), ("access_no", "No")]),
                 }
             if stage in prompts:

@@ -1,5 +1,7 @@
 """Shared intake state machine for USSD and WhatsApp channels."""
 
+import re
+
 from engine.models import UserProfile
 from engine.pipeline import run_recommendation
 from services.facilities import find_nearest_facilities, format_facilities_message
@@ -68,13 +70,90 @@ def get_prompt_for_stage(stage: str, language: str = "english") -> str:
         ),
         "age": "Enter your age (years):",
         "breastfeeding": "Breastfeeding baby under 6 months?\n1. Yes  2. No",
-        "health_flags": "Hypertension, migraine w/ aura, or blood clots?\n1. Yes  2. No",
-        "preference": "Prefer daily pill or set-and-forget?\n1. Daily  2. Set-and-forget",
+        "health_flags": (
+            "Any of these? Reply with numbers (e.g. 1,3) or type your own:\n"
+            "1. High blood pressure\n"
+            "2. Migraine with aura\n"
+            "3. Blood clots / DVT\n"
+            "4. Diabetes\n"
+            "5. Liver disease\n"
+            "6. Breast cancer history\n"
+            "0. None of these"
+        ),
+        "preference": (
+            "What do you prefer?\n"
+            "1. Daily pill\n"
+            "2. Set-and-forget (long-acting)\n"
+            "Or type what you want in your own words."
+        ),
         "access": "Can you visit a clinic for FP services?\n1. Yes  2. No",
         "district": "Enter your district (e.g. Nairobi, Kampala):",
         "facility_offer": "Find nearest clinic?\n1. Yes  2. No",
     }
     return prompts.get(stage, "Thank you.")
+
+
+HEALTH_FLAG_MAP = {
+    "1": "high_blood_pressure",
+    "2": "migraines_aura",
+    "3": "blood_clots",
+    "4": "diabetes",
+    "5": "liver_disease",
+    "6": "breast_cancer",
+    "high blood pressure": "high_blood_pressure",
+    "hypertension": "high_blood_pressure",
+    "migraine": "migraines_aura",
+    "migraines": "migraines_aura",
+    "blood clot": "blood_clots",
+    "blood clots": "blood_clots",
+    "dvt": "blood_clots",
+    "diabetes": "diabetes",
+    "liver": "liver_disease",
+    "breast cancer": "breast_cancer",
+}
+
+
+def parse_health_selection(text: str) -> tuple[str, list[str], str | None]:
+    """
+    Parse multi-select health answers.
+    Returns (health_flags yes/no, selected flag ids, free_text_or_none).
+    """
+    raw = (text or "").strip()
+    lowered = raw.lower()
+    if not raw:
+        return "no", [], None
+    if lowered in ("0", "none", "no", "2", "health_no", "none of these", "hapana", "zii"):
+        return "no", [], None
+    if lowered in ("1", "yes", "health_yes", "ndiyo", "ndio"):
+        # legacy single yes without specifics
+        return "yes", [], None
+
+    selected: list[str] = []
+    # numbers like 1,3 or 1 3 or 1and3
+    tokens = [t for t in re.split(r"[\s,;/|+]+", lowered) if t]
+    for t in tokens:
+        if t in HEALTH_FLAG_MAP:
+            flag = HEALTH_FLAG_MAP[t]
+            if flag not in selected:
+                selected.append(flag)
+        elif t.isdigit() and t in HEALTH_FLAG_MAP:
+            flag = HEALTH_FLAG_MAP[t]
+            if flag not in selected:
+                selected.append(flag)
+
+    # phrase scan for free text
+    for phrase, flag in HEALTH_FLAG_MAP.items():
+        if not phrase.isdigit() and phrase in lowered and flag not in selected:
+            selected.append(flag)
+
+    if selected:
+        return "yes", selected, None
+
+    # free-form concern the user typed
+    if len(raw) >= 3 and lowered not in ("1", "2"):
+        return "yes", [], raw[:300]
+
+    return "no", [], None
 
 
 def process_intake_input(session: dict, user_input: str) -> tuple[dict, str, bool]:
@@ -87,6 +166,7 @@ def process_intake_input(session: dict, user_input: str) -> tuple[dict, str, boo
     text = (user_input or "").strip()
     channel = session.get("channel", "ussd")
     max_chars = 160 if channel == "ussd" else 300
+    lang = session.get("language", "english")
 
     if session.get("awaiting_facility"):
         if text in ("1", "yes", "y"):
@@ -98,10 +178,10 @@ def process_intake_input(session: dict, user_input: str) -> tuple[dict, str, boo
         return session, "Thank you. Visit a CHW when ready.", True
 
     if stage == "language":
-        lang = LANGUAGE_OPTIONS.get(text, "english" if text.lower() in LANGUAGE_LABELS else None)
-        if not lang:
+        selected = LANGUAGE_OPTIONS.get(text, "english" if text.lower() in LANGUAGE_LABELS else None)
+        if not selected:
             return session, "Invalid. " + get_prompt_for_stage("language"), False
-        session["language"] = lang
+        session["language"] = selected
         session["stage"] = "age"
         return session, get_prompt_for_stage("age"), False
 
@@ -113,30 +193,58 @@ def process_intake_input(session: dict, user_input: str) -> tuple[dict, str, boo
         return session, get_prompt_for_stage("breastfeeding"), False
 
     if stage == "breastfeeding":
-        if text not in ("1", "2"):
+        if text not in ("1", "2", "breastfeeding_yes", "breastfeeding_no", "yes", "no"):
             return session, get_prompt_for_stage("breastfeeding"), False
-        profile["breastfeeding"] = "yes" if text == "1" else "no"
+        profile["breastfeeding"] = "yes" if text in ("1", "breastfeeding_yes", "yes") else "no"
         session["stage"] = "health_flags"
         return session, get_prompt_for_stage("health_flags"), False
 
     if stage == "health_flags":
-        if text not in ("1", "2"):
-            return session, get_prompt_for_stage("health_flags"), False
-        profile["health_flags"] = "yes" if text == "1" else "no"
+        flag_status, flags, free_text = parse_health_selection(text)
+        profile["health_flags"] = flag_status
+        profile["health_flag_list"] = flags
+        if free_text:
+            profile["other_concerns"] = free_text
         session["stage"] = "preference"
         return session, get_prompt_for_stage("preference"), False
 
     if stage == "preference":
-        if text not in ("1", "2"):
+        lowered = text.lower()
+        if text in ("pref_type", "type") or lowered in ("i'll type", "ill type", "nitaandika", "andika"):
+            session["awaiting_pref_text"] = True
+            if lang == "kiswahili":
+                return session, "Andika unavyopendelea kwa maneno yako:", False
+            return session, "Type what you prefer in your own words:", False
+        if session.get("awaiting_pref_text"):
+            session.pop("awaiting_pref_text", None)
+            profile["preference"] = "daily"
+            profile["preference_notes"] = text[:300]
+            session["stage"] = "access"
+            return session, get_prompt_for_stage("access"), False
+        if text in ("1", "daily") or "daily" in lowered or "pill" in lowered:
+            profile["preference"] = "daily"
+        elif text in ("2", "long_acting", "long-acting") or "forget" in lowered or "implant" in lowered or "iud" in lowered:
+            profile["preference"] = "long_acting"
+        elif len(text) >= 3:
+            # free-text preference typed directly
+            profile["preference"] = "daily"
+            profile["preference_notes"] = text[:300]
+        else:
             return session, get_prompt_for_stage("preference"), False
-        profile["preference"] = "daily" if text == "1" else "long_acting"
+        session.pop("awaiting_pref_text", None)
         session["stage"] = "access"
         return session, get_prompt_for_stage("access"), False
 
     if stage == "access":
-        if text not in ("1", "2"):
+        if text not in ("1", "2", "access_yes", "access_no", "yes", "no"):
+            # allow free text note then ask again simply
+            if len(text) >= 3:
+                profile["access_notes"] = text[:300]
+                profile["clinic_access"] = "yes"
+                session["stage"] = "district"
+                return session, get_prompt_for_stage("district"), False
             return session, get_prompt_for_stage("access"), False
-        profile["clinic_access"] = "yes" if text == "1" else "no"
+        profile["clinic_access"] = "yes" if text in ("1", "access_yes", "yes") else "no"
         session["stage"] = "district"
         return session, get_prompt_for_stage("district"), False
 
