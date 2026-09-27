@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 // amara.png has a light mint background whose edges fade to transparent inside the file.
 export function DoctorImage({ id, className }) {
-  const doc = DOCTORS[id];
+  const doc = DOCTORS[id] || DOCTORS.amara;
   return (
     <img
       src={doc.image}

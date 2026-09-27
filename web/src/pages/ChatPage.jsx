@@ -128,7 +128,14 @@ export default function ChatPage() {
       </ChatShell>
 
       {visMethod && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#0D1B2A] text-white">
+              <span className="mb-4 h-10 w-10 animate-spin rounded-full border-4 border-teal-500 border-t-transparent" />
+              <p className="font-semibold text-teal-400">Loading 3D explainer…</p>
+            </div>
+          }
+        >
           <BodyVisualization method={visMethod} doctorId={doctor} onClose={() => setVisMethod(null)} recommendations={recommendation} />
         </Suspense>
       )}

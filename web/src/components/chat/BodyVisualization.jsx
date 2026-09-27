@@ -1,6 +1,6 @@
 import React, { Suspense, useState, useEffect, useRef, useMemo, Component } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { useGLTF, OrbitControls, Html, Line } from "@react-three/drei";
+import { useGLTF, OrbitControls, Html } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
 import { X, RotateCw, ZoomIn, ZoomOut, RotateCcw, Info, Shield, Check, Eye, MessageCircle, Send, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,13 +27,19 @@ function isWebGLAvailable() {
 class Vis3DErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, errorMsg: "" };
   }
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error) {
+    return { hasError: true, errorMsg: error?.message || "3D render failed" };
   }
   componentDidCatch(error) {
     console.warn("BodyVisualization 3D failed:", error);
+  }
+  componentDidUpdate(prevProps) {
+    // Allow retry when the user switches method
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false, errorMsg: "" });
+    }
   }
   render() {
     if (this.state.hasError) return this.props.fallback;
@@ -204,7 +210,7 @@ function BodySilhouetteMesh({ isMobile, onPartHover, activeMethod }) {
 // -------------------------------------------------------------
 
 /** Floating HTML tag with a CSS arrow pointing at a 3D spot */
-function SceneTag({ children, position, tone = "teal", side = "right", distanceFactor = 5.5 }) {
+function SceneTag({ children, position, tone = "teal", side = "right", distanceFactor = 12 }) {
   const tones = {
     teal: { badge: "border-[#0E7A80] bg-[#0E7A80] text-white", arrow: "#0E7A80" },
     cream: { badge: "border-[#E8E0D0] bg-[#F5F0E6] text-[#1a2a32]", arrow: "#F5F0E6" },
@@ -213,16 +219,16 @@ function SceneTag({ children, position, tone = "teal", side = "right", distanceF
   const t = tones[tone] || tones.teal;
   const tipStyle =
     side === "left"
-      ? { right: "100%", top: "50%", marginTop: -6, borderWidth: "6px 8px 6px 0", borderColor: `transparent ${t.arrow} transparent transparent` }
+      ? { right: "100%", top: "50%", marginTop: -4, borderWidth: "4px 6px 4px 0", borderColor: `transparent ${t.arrow} transparent transparent` }
       : side === "up"
-        ? { left: "50%", bottom: "100%", marginLeft: -6, borderWidth: "0 6px 8px 6px", borderColor: `transparent transparent ${t.arrow} transparent` }
+        ? { left: "50%", bottom: "100%", marginLeft: -4, borderWidth: "0 4px 6px 4px", borderColor: `transparent transparent ${t.arrow} transparent` }
         : side === "down"
-          ? { left: "50%", top: "100%", marginLeft: -6, borderWidth: "8px 6px 0 6px", borderColor: `${t.arrow} transparent transparent transparent` }
-          : { left: "100%", top: "50%", marginTop: -6, borderWidth: "6px 0 6px 8px", borderColor: `transparent transparent transparent ${t.arrow}` };
+          ? { left: "50%", top: "100%", marginLeft: -4, borderWidth: "6px 4px 0 4px", borderColor: `${t.arrow} transparent transparent transparent` }
+          : { left: "100%", top: "50%", marginTop: -4, borderWidth: "4px 0 4px 6px", borderColor: `transparent transparent transparent ${t.arrow}` };
 
   return (
-    <Html position={position} center distanceFactor={distanceFactor} style={{ pointerEvents: "none" }} zIndexRange={[80, 0]}>
-      <div className={`relative whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-wide shadow-lg ${t.badge}`}>
+    <Html position={position} center distanceFactor={distanceFactor} style={{ pointerEvents: "none", userSelect: "none" }} zIndexRange={[40, 0]} prepend>
+      <div className={`relative whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] font-semibold leading-tight tracking-wide shadow-md ${t.badge}`}>
         {children}
         <span className="absolute block h-0 w-0 border-solid" style={tipStyle} aria-hidden />
       </div>
@@ -230,27 +236,30 @@ function SceneTag({ children, position, tone = "teal", side = "right", distanceF
   );
 }
 
-/** 3D arrow from a label float-point toward the insertion site */
+/** 3D arrow from a label float-point toward the insertion site (mesh-based; avoids drei Line crashes) */
 function InsertionArrow({ from = [0.28, 0.48, 0.38], to = [0.03, 0.2, 0.09], color = "#4DD6DC" }) {
-  const dir = useMemo(() => {
+  const { quat, mid, len, tip } = useMemo(() => {
     const a = new THREE.Vector3(...from);
     const b = new THREE.Vector3(...to);
     const d = b.clone().sub(a);
-    const len = d.length() || 1;
+    const length = Math.max(d.length(), 0.01);
     d.normalize();
     const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
-    const mid = a.clone().add(b).multiplyScalar(0.5);
-    return { quat, mid, len, tip: b };
+    const mid = a.clone().lerp(b, 0.5);
+    return { quat, mid, len: length, tip: b };
   }, [from, to]);
 
   return (
     <group>
-      <Line points={[from, to]} color={color} lineWidth={2.5} transparent opacity={0.9} dashed={false} />
-      <mesh position={dir.tip.toArray()} quaternion={dir.quat}>
-        <coneGeometry args={[0.028, 0.07, 10]} />
+      <mesh position={mid.toArray()} quaternion={quat}>
+        <cylinderGeometry args={[0.006, 0.006, Math.max(len - 0.06, 0.02), 8]} />
+        <meshBasicMaterial color={color} transparent opacity={0.9} />
+      </mesh>
+      <mesh position={tip.toArray()} quaternion={quat}>
+        <coneGeometry args={[0.022, 0.055, 10]} />
         <meshBasicMaterial color={color} />
       </mesh>
-      <SceneTag position={[from[0] + 0.02, from[1] + 0.04, from[2]]} tone="purple" side="down" distanceFactor={6}>
+      <SceneTag position={[from[0] + 0.02, from[1] + 0.04, from[2]]} tone="purple" side="down" distanceFactor={14}>
         Rod goes here →
       </SceneTag>
     </group>
@@ -408,7 +417,7 @@ function RealImplantInsertionScene({ step, isMobile, mode = "implant" }) {
     <group ref={groupRef} position={basePos}>
       <primitive object={armScene} />
       {/* Tag on the arm / hand */}
-      <SceneTag position={[-0.55, -0.05, 0.15]} tone="teal" side="right" distanceFactor={isMobile ? 4.8 : 5.8}>
+      <SceneTag position={[-0.55, -0.05, 0.15]} tone="teal" side="right" distanceFactor={isMobile ? 11 : 13}>
         Your arm
       </SceneTag>
       <group ref={deviceRef}>
@@ -422,7 +431,7 @@ function RealImplantInsertionScene({ step, isMobile, mode = "implant" }) {
               <cylinderGeometry args={[0.006, 0.006, 0.12, 8]} />
               <meshStandardMaterial color="#9CA3AF" metalness={0.7} roughness={0.2} />
             </mesh>
-            <SceneTag position={[0.12, 0.16, 0.04]} tone="cream" side="left" distanceFactor={5}>
+            <SceneTag position={[0.12, 0.16, 0.04]} tone="cream" side="left" distanceFactor={13}>
               Injection
             </SceneTag>
           </>
@@ -447,7 +456,7 @@ function RealImplantInsertionScene({ step, isMobile, mode = "implant" }) {
               <meshStandardMaterial color="#F5F0E6" roughness={0.9} metalness={0.02} />
             </mesh>
             {/* Tag sticks to the moving rod */}
-            <SceneTag position={[0.14, 0.02, 0.02]} tone="cream" side="left" distanceFactor={5}>
+            <SceneTag position={[0.14, 0.02, 0.02]} tone="cream" side="left" distanceFactor={13}>
               Implant rod
             </SceneTag>
           </>
@@ -465,7 +474,7 @@ function RealImplantInsertionScene({ step, isMobile, mode = "implant" }) {
         <InsertionArrow from={[0.22, 0.38, 0.28]} to={[0.01, 0.16, 0.03]} />
       </group>
       <group ref={seatedTagRef} visible={false}>
-        <SceneTag position={[0.06, 0.24, 0.06]} tone="purple" side="down" distanceFactor={5.5}>
+        <SceneTag position={[0.06, 0.24, 0.06]} tone="purple" side="down" distanceFactor={13}>
           Under the skin here
         </SceneTag>
       </group>
@@ -1361,7 +1370,7 @@ export default function BodyVisualization({ method: initialMethod, doctorId, onC
   const currentCameraZ = cameraZoom;
 
   return (
-    <Vis3DErrorBoundary key={method} fallback={textFallback}>
+    <Vis3DErrorBoundary key={method} resetKey={method} fallback={textFallback}>
     <div className="fixed inset-0 z-50 bg-[#0D1B2A] text-white flex flex-col overflow-hidden font-sans">
       
       {/* Background radial gradient glow behind the body */}
@@ -1388,7 +1397,13 @@ export default function BodyVisualization({ method: initialMethod, doctorId, onC
             camera={{ position: [0, 0.15, currentCameraZ], fov: 38 }}
             style={{ background: "transparent", width: "100%", height: "100%" }}
             gl={{ alpha: true, antialias: true, powerPreference: "default", failIfMajorPerformanceCaveat: false }}
-            dpr={[1, 1.5]}
+            dpr={[1, 1.25]}
+            onCreated={({ gl }) => {
+              gl.domElement.addEventListener("webglcontextlost", (e) => {
+                e.preventDefault();
+                console.warn("WebGL context lost");
+              });
+            }}
           >
             <ambientLight intensity={0.45} />
             <directionalLight position={[1, 3, 2]} intensity={1.0} color="#ffffff" />
