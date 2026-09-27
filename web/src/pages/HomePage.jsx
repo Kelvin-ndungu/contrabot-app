@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { LanguageToggle } from "@/components/chat/LanguageToggle";
 import { DoctorImage } from "@/components/chat/DoctorPanel";
+import FeaturePhone from "@/components/FeaturePhone";
 import { useAppStore } from "@/store/useAppStore";
 import { HOME, lang } from "@/lib/triage";
 
@@ -69,8 +70,7 @@ function PhoneChannels({ t }) {
           className="bg-[#25D366] text-white shadow-[0_4px_14px_rgba(37,211,102,0.35)] hover:bg-[#1EBE5A]"
         />
         <PhoneButton
-          // "#" must be encoded or the dialler drops everything after it.
-          href={`tel:${USSD_CODE.replace(/#/g, "%23")}`}
+          href="#ussd-demo"
           icon={
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20">
               <Hash className="h-5 w-5" />
@@ -195,6 +195,30 @@ export default function HomePage() {
           <PathCard to="/triage" icon={ClipboardList} path={t.paths.triage} />
         </div>
         <PhoneChannels t={t.phone} />
+      </section>
+
+      <section id="ussd-demo" className="scroll-mt-20 bg-[#F4FAF9] px-4 py-16 sm:py-20">
+        <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-[1.1fr_auto]">
+          <div>
+            <h2 className="text-3xl font-bold [text-wrap:balance] sm:text-4xl">{t.ussdDemo.title}</h2>
+            <p className="mt-3 max-w-xl text-muted">{t.ussdDemo.sub}</p>
+            <ol className="mt-8 flex flex-col gap-5">
+              {t.ussdDemo.steps.map(([title, text], i) => (
+                <li key={title} className="flex gap-4">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#0E8C85] to-[#2DC2B0] text-sm font-bold text-white">
+                    {i + 1}
+                  </span>
+                  <div>
+                    <p className="font-semibold text-ink">{title}</p>
+                    <p className="mt-1 text-[15px] leading-relaxed text-muted">{text}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <p className="mt-6 font-mono text-sm font-semibold text-[#0E7A80]">{USSD_CODE}</p>
+          </div>
+          <FeaturePhone code={USSD_CODE} labels={t.ussdDemo} />
+        </div>
       </section>
 
       <Section title={t.howTitle} sub={t.howSub}>

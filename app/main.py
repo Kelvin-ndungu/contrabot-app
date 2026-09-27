@@ -16,11 +16,17 @@ app = FastAPI(title="ContraBot", version="1.0.0")
 
 origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:5174,http://localhost:5175",
+    "http://localhost:5173,http://localhost:5174,http://localhost:5175,https://contrabot01.vercel.app",
 ).split(",")
+# Always allow the production Vercel frontend even if CORS_ORIGINS is overridden.
+extra = ["https://contrabot01.vercel.app", "https://contrabot01-jamieblessings38-9451s-projects.vercel.app"]
+allow = [o.strip() for o in origins if o.strip()]
+for o in extra:
+    if o not in allow:
+        allow.append(o)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in origins if o.strip()],
+    allow_origins=allow,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

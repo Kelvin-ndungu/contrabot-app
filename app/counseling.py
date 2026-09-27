@@ -27,7 +27,6 @@ def get_counseling_response(user_query: str, channel: str = "whatsapp", language
         Plain text counseling response
     """
     max_tokens = 160 if channel == "ussd" else 300
-    model = "gpt-3.5-turbo"
 
     try:
         response = chat_completion(
@@ -35,10 +34,11 @@ def get_counseling_response(user_query: str, channel: str = "whatsapp", language
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_query},
             ],
-            model=model,
             temperature=0.7,
             max_tokens=max_tokens,
         )
         return response
-    except Exception as e:
-        return f"I encountered an error processing your request: {str(e)}"
+    except Exception:
+        if channel == "ussd":
+            return "Sorry, try again in a moment."
+        return "Sorry, I could not answer just now. Please try again in a moment."

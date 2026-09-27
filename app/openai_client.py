@@ -55,12 +55,12 @@ def _get_qwen_client():
         return None
 
 
-def _qwen_completion(messages, task="chat", temperature=0.7, max_tokens=500):
+def _qwen_completion(messages, task="chat", temperature=0.7, max_tokens=500, model=None):
     client = _get_qwen_client()
     if not client:
         return None
     env_name, default_model = QWEN_MODELS.get(task, QWEN_MODELS["chat"])
-    model = os.getenv(env_name, default_model)
+    model = model or os.getenv(env_name, default_model)
     kwargs = dict(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
     try:
         # Qwen3 models reject non-streaming calls unless thinking is switched off.
@@ -139,15 +139,25 @@ def _anthropic_completion(messages, model=None, max_tokens=500):
     """Simple Anthropic completion via REST using Messages API."""
     if not ANTHROPIC_API_KEY:
         return None
+    system_parts = [m.get("content") or "" for m in messages if m.get("role") == "system"]
+    chat_messages = [
+        {"role": m.get("role"), "content": m.get("content") or ""}
+        for m in messages
+        if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+    ]
+    if not chat_messages:
+        return None
     payload = {
-        "model": model or os.getenv("ANTHROPIC_CHAT_MODEL", "claude-3-haiku-20240307"),
-        "messages": messages,
+        "model": model or os.getenv("ANTHROPIC_CHAT_MODEL", "claude-haiku-4-5"),
+        "messages": chat_messages,
         "max_tokens": max_tokens,
     }
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
     headers = {
         "Content-Type": "application/json",
         "x-api-key": ANTHROPIC_API_KEY,
-        "Anthropic-Version": "2024-06-01",
+        "Anthropic-Version": "2023-06-01",
     }
     try:
         resp = httpx.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=30)
@@ -169,20 +179,25 @@ def _anthropic_embeddings(texts, model=None):
 
 
 def chat_completion(messages, model=None, temperature=0.7, max_tokens=500, task="chat"):
-    """Return a text completion using Qwen (preferred), then Groq, Anthropic, Gemini, OpenAI.
+    """Return a text completion using Qwen on ModelScope, then other providers if Qwen is unset.
 
-    `task` picks the Qwen model ("chat" or "router"); the other providers ignore it.
+    `task` picks the Qwen model ("chat" or "router"). A non-Qwen model name does not skip Qwen.
     """
-    if not model:
-        qwen_resp = _qwen_completion(messages, task=task, temperature=temperature, max_tokens=max_tokens)
-        if qwen_resp:
-            return qwen_resp
+    qwen_model = model if model and "qwen" in str(model).lower() else None
+    qwen_resp = _qwen_completion(
+        messages, task=task, temperature=temperature, max_tokens=max_tokens, model=qwen_model
+    )
+    if qwen_resp:
+        return qwen_resp
+    # A leftover OpenAI model name must not be sent to the other providers.
+    if model and "qwen" not in str(model).lower():
+        model = None
 
     # Groq next (fastest inference)
     groq_client = _get_groq_client()
     if groq_client:
         try:
-            groq_model = model or os.getenv("GROQ_CHAT_MODEL", "llama-3.1-70b-versatile")
+            groq_model = model or os.getenv("GROQ_CHAT_MODEL", "qwen/qwen3.8-27b")
             response = groq_client.chat.completions.create(
                 model=groq_model,
                 messages=messages,

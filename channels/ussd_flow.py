@@ -265,12 +265,6 @@ STEPS: list[dict[str, Any]] = [
         "when": _female,
         "options": [("yes", "Yes"), ("no", "No")],
     },
-    {
-        "id": "district",
-        "q": "Your district? (type name)",
-        "free_text": True,
-        "when": _female,
-    },
 ]
 
 AGE_VALUE = {"u18": 16, "18_19": 19, "20_34": 27, "35_39": 37, "40_45": 42, "46": 48}

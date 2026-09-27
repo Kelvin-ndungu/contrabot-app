@@ -1,6 +1,8 @@
 """Frontend API routes under /api prefix."""
 
+import re
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
@@ -31,6 +33,16 @@ from services.chat_router import mentions_assault, route_message
 from app.openai_client import chat_completion
 
 router = APIRouter()
+
+# How many earlier messages are sent back to the model with each new question.
+HISTORY_TURNS = 6
+
+_CHAT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "chat_system.txt"
+CHAT_SYSTEM_PROMPT = (
+    _CHAT_PROMPT_PATH.read_text(encoding="utf-8")
+    if _CHAT_PROMPT_PATH.exists()
+    else "You are {doctor}, a kind family planning doctor in Kenya. Use simple words and short sentences."
+)
 
 AGE_MAP = {"under_18": 17, "18-24": 21, "25-34": 30, "35-44": 40, "45+": 47}
 RED_FLAG_FLAGS = {
@@ -225,7 +237,7 @@ def _clean_reply(reply: str) -> tuple[str, set[int]]:
     cited = {int(n) for n in re.findall(r"\[(\d+)\]", reply)}
     reply = re.sub(r"\s*\[\d+\]", "", reply)
     # The chat bubble shows plain text; drop markdown bullets and bold if the model adds them.
-    reply = re.sub(r"^\s*[*\-ΓÇó]\s+", "", reply, flags=re.M).replace("**", "")
+    reply = re.sub(r"^\s*[*\-•]\s+", "", reply, flags=re.M).replace("**", "")
     return reply.strip(), cited
 
 
